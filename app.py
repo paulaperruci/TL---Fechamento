@@ -13,7 +13,6 @@ ONEDRIVE_LINK = "https://tlportfolioconsultoria.sharepoint.com/:x:/s/financeiro/
 
 @st.cache_data(ttl=60) # Recarrega os dados a cada 1 minuto
 def load_data(url):
-    # Simula a requisição vinda de um navegador real para ignorar o bloqueio 403 do SharePoint
     req = urllib.request.Request(
         url, 
         headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
@@ -21,8 +20,8 @@ def load_data(url):
     with urllib.request.urlopen(req) as response:
         content = response.read()
     
-    # Lê a aba Lançamentos
-    df = pd.read_excel(io.BytesIO(content), sheet_name='Lançamentos')
+    # Especificado engine='openpyxl' explicitamente para resolver o erro
+    df = pd.read_excel(io.BytesIO(content), sheet_name='Lançamentos', engine='openpyxl')
     df['DataRef'] = pd.to_datetime(df['DataRef'])
     df['AnoRef'] = df['DataRef'].dt.year
     df['MêsRef'] = df['DataRef'].dt.month
