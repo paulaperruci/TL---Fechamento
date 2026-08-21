@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import urllib.request
+import requests
 import io
 
 # Configuração da página
@@ -8,20 +8,31 @@ st.set_page_config(page_title="TL Financeiro - Executive Dashboard", layout="wid
 
 st.title("📊 TL Financeiro - Executive Dashboard")
 
-# Link do SharePoint
+# URL de compartilhamento do SharePoint
 ONEDRIVE_LINK = "https://tlportfolioconsultoria.sharepoint.com/:x:/s/financeiro/IQB8ppfjijXDSruvof6G0FUPAdZCrfvScsU7hM8qTXTh-fo?download=1"
 
 @st.cache_data(ttl=60) # Recarrega os dados a cada 1 minuto
 def load_data(url):
-    req = urllib.request.Request(
-        url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
-    )
-    with urllib.request.urlopen(req) as response:
-        content = response.read()
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    })
     
-    # Especificado engine='openpyxl' explicitamente para resolver o erro
-    df = pd.read_excel(io.BytesIO(content), sheet_name='Lançamentos', engine='openpyxl')
+    # Faz o primeiro disparo para capturar redirecionamento e cookies do SharePoint
+    response = session.get(url, allow_redirects=True)
+    
+    # Se redirecionar para a página de visualização, adicionamos o parâmetro download
+    download_url = response.url
+    if "download=1" not in download_url:
+        if "?" in download_url:
+            download_url += "&download=1"
+        else:
+            download_url += "?download=1"
+            
+    final_response = session.get(download_url)
+    
+    # Lê os dados da aba Lançamentos usando a engine openpyxl
+    df = pd.read_excel(io.BytesIO(final_response.content), sheet_name='Lançamentos', engine='openpyxl')
     df['DataRef'] = pd.to_datetime(df['DataRef'])
     df['AnoRef'] = df['DataRef'].dt.year
     df['MêsRef'] = df['DataRef'].dt.month
