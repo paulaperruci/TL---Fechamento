@@ -24,8 +24,6 @@ def load_data(url):
         download_url += "&download=1" if "?" in download_url else "?download=1"
             
     final_response = session.get(download_url)
-    
-    # Lê a aba 'Lançamentos' testando os cabeçalhos das primeiras linhas
     excel_bytes = io.BytesIO(final_response.content)
     
     # Busca automática da linha onde está 'DataRef'
@@ -42,16 +40,36 @@ def load_data(url):
     if df is None:
         raise KeyError("A coluna 'DataRef' não foi encontrada nas primeiras linhas da aba 'Lançamentos'.")
 
-    # Limpeza e tratamento das datas
+    # 1. FILTRO DE APENAS "REALIZADO" NA COLUNA D (Status / Créd/Déb)
+    # Verifica qual coluna na posição D (índice 2 ou 3) ou nome correspondente
+    col_status = None
+    for col in ['Status', 'Créd/Déb', df.columns[2], df.columns[3]]:
+        if col in df.columns:
+            if 'Realizado' in df[col].astype(str).values:
+                col_status = col
+                break
+    
+    if col_status:
+        df = df[df[col_status].astype(str).str.strip().str.lower() == 'realizado'].copy()
+
+    # Tratamento de datas
     df['DataRef'] = pd.to_datetime(df['DataRef'], errors='coerce')
-    df = df.dropna(subset=['DataRef']) # Remove linhas sem data válida
+    df = df.dropna(subset=['DataRef'])
     df['AnoRef'] = df['DataRef'].dt.year.astype(int)
-    df['MêsRef'] = df['DataRef'].dt.month
+    df['MêsRef'] = df['DataRef'].dt.month.astype(int)
+    
+    # Mapeamento do nome dos meses
+    meses_map = {
+        1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+        7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'
+    }
+    df['MêsNome'] = df['MêsRef'].map(meses_map)
+    
     return df
 
 try:
     df_raw = load_data(ONEDRIVE_LINK)
-    st.sidebar.success("✅ Conectado ao SharePoint!")
+    st.sidebar.success("✅ Conectado ao SharePoint! (Filtro: Apenas Realizados)")
 except Exception as e:
     st.error(f"Erro ao carregar os dados do SharePoint: {e}")
     st.stop()
@@ -59,17 +77,26 @@ except Exception as e:
 # --- FILTROS LATERAIS ---
 st.sidebar.header("⚙️ Filtros")
 
-# Filtro de Moeda
+# 1. Filtro de Moeda
 moeda = st.sidebar.radio("Selecione a Moeda", options=['USD', 'BRL', 'EUR'], index=0)
 
-# Filtro por Período
+# 2. Filtro por Ano
 anos_disponiveis = sorted(df_raw['AnoRef'].unique(), reverse=True)
 anos_selecionados = st.sidebar.multiselect("AnoRef", options=anos_disponiveis, default=anos_disponiveis[:2])
 
+# 3. Filtro por Mês (Seleção de Meses para Somar)
+meses_ordem = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+meses_disponiveis = [m for m in meses_ordem if m in df_raw['MêsNome'].unique()]
+meses_selecionados = st.sidebar.multiselect("Meses", options=meses_disponiveis, default=meses_disponiveis)
+
+# Aplicar filtros
+df_filtered = df_raw.copy()
+
 if anos_selecionados:
-    df_filtered = df_raw[df_raw['AnoRef'].isin(anos_selecionados)].copy()
-else:
-    df_filtered = df_raw.copy()
+    df_filtered = df_filtered[df_filtered['AnoRef'].isin(anos_selecionados)]
+
+if meses_selecionados:
+    df_filtered = df_filtered[df_filtered['MêsNome'].isin(meses_selecionados)]
 
 df_filtered['Valor_Ativo'] = pd.to_numeric(df_filtered[moeda], errors='coerce').fillna(0)
 
@@ -135,3 +162,75 @@ with col1:
     st.dataframe(rev_df.style.format({'Valor_Ativo': '{:,.2f}', 'Share (%)': '{:.2f}%'}), use_container_width=True)
 with col2:
     st.bar_chart(rev_df.set_index('Serviço')['Share (%)'])
+
+# --- KPI 4: RESULTADO POR MERCADO (RATEIO DE DESPESAS GLOBAIS) ---
+st.markdown("---")
+st.subheader("🌐 4. Resultado por Mercado (Com Rateio Proporcional de Despesas Globais)")
+
+rec_merc = df_filtered[df_filtered['Classificação'] == 'Revenue'].groupby('Mercado')['Valor_Ativo'].sum()
+tot_rec_merc = rec_merc.sum()
+desp_merc = df_filtered[df_filtered['Classificação'].isin(['Expenses', 'Partner'])].groupby('Mercado')['Valor_Ativo'].sum().abs()
+desp_global_merc = desp_merc.get('Global', 0)
+
+resultado_merc = []
+for m in [m for m in rec_merc.index if m != 'Global']:
+    r = rec_merc.get(m, 0)
+    pct = (r / tot_rec_merc) if tot_rec_merc > 0 else 0
+    d_dir = desp_merc.get(m, 0)
+    d_glob = desp_global_merc * pct
+    d_tot = d_dir + d_glob
+    
+    resultado_merc.append({
+        "Mercado": m,
+        "Gross Revenue": r,
+        "Share Receita (%)": pct * 100,
+        "Despesa Direta": d_dir,
+        "Despesa Global Alocada": d_glob,
+        "Despesa Total": d_tot,
+        "Resultado Net": r - d_tot
+    })
+
+st.dataframe(pd.DataFrame(resultado_merc).style.format({
+    'Gross Revenue': '{:,.2f}',
+    'Share Receita (%)': '{:.2f}%',
+    'Despesa Direta': '{:,.2f}',
+    'Despesa Global Alocada': '{:,.2f}',
+    'Despesa Total': '{:,.2f}',
+    'Resultado Net': '{:,.2f}'
+}), use_container_width=True)
+
+# --- KPI 5: RESULTADO POR BRAND / SERVIÇO (RATEIO DE DESPESAS GLOBAIS) ---
+st.markdown("---")
+st.subheader("🏷️ 5. Resultado por Brand / Serviço (Com Rateio Proporcional de Despesas Globais)")
+
+rec_serv = df_filtered[df_filtered['Classificação'] == 'Revenue'].groupby('Serviço')['Valor_Ativo'].sum()
+tot_rec_serv = rec_serv.sum()
+desp_serv = df_filtered[df_filtered['Classificação'].isin(['Expenses', 'Partner'])].groupby('Serviço')['Valor_Ativo'].sum().abs()
+desp_global_serv = desp_serv.get('Global', 0)
+
+resultado_serv = []
+for s in [s for s in rec_serv.index if s != 'Global']:
+    r = rec_serv.get(s, 0)
+    pct = (r / tot_rec_serv) if tot_rec_serv > 0 else 0
+    d_dir = desp_serv.get(s, 0)
+    d_glob = desp_global_serv * pct
+    d_tot = d_dir + d_glob
+    
+    resultado_serv.append({
+        "Brand / Serviço": s,
+        "Gross Revenue": r,
+        "Share Receita (%)": pct * 100,
+        "Despesa Direta": d_dir,
+        "Despesa Global Alocada": d_glob,
+        "Despesa Total": d_tot,
+        "Resultado Net": r - d_tot
+    })
+
+st.dataframe(pd.DataFrame(resultado_serv).style.format({
+    'Gross Revenue': '{:,.2f}',
+    'Share Receita (%)': '{:.2f}%',
+    'Despesa Direta': '{:,.2f}',
+    'Despesa Global Alocada': '{:,.2f}',
+    'Despesa Total': '{:,.2f}',
+    'Resultado Net': '{:,.2f}'
+}), use_container_width=True)
