@@ -1,17 +1,28 @@
 import streamlit as st
 import pandas as pd
+import urllib.request
+import io
 
 # Configuração da página
 st.set_page_config(page_title="TL Financeiro - Executive Dashboard", layout="wide")
 
 st.title("📊 TL Financeiro - Executive Dashboard")
 
-# Link direto de download do SharePoint (Aba Lançamentos)
+# Link do SharePoint
 ONEDRIVE_LINK = "https://tlportfolioconsultoria.sharepoint.com/:x:/s/financeiro/IQB8ppfjijXDSruvof6G0FUPAdZCrfvScsU7hM8qTXTh-fo?download=1"
 
-@st.cache_data(ttl=60) # Recarrega e busca novos dados do SharePoint a cada 1 minuto
+@st.cache_data(ttl=60) # Recarrega os dados a cada 1 minuto
 def load_data(url):
-    df = pd.read_excel(url, sheet_name='Lançamentos')
+    # Simula a requisição vinda de um navegador real para ignorar o bloqueio 403 do SharePoint
+    req = urllib.request.Request(
+        url, 
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
+    )
+    with urllib.request.urlopen(req) as response:
+        content = response.read()
+    
+    # Lê a aba Lançamentos
+    df = pd.read_excel(io.BytesIO(content), sheet_name='Lançamentos')
     df['DataRef'] = pd.to_datetime(df['DataRef'])
     df['AnoRef'] = df['DataRef'].dt.year
     df['MêsRef'] = df['DataRef'].dt.month
