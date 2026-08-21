@@ -8,7 +8,7 @@ st.set_page_config(page_title="TL Financeiro - Executive Dashboard", layout="wid
 
 st.title("📊 TL Financeiro - Executive Dashboard")
 
-# URL de compartilhamento do SharePoint
+# URL do SharePoint
 ONEDRIVE_LINK = "https://tlportfolioconsultoria.sharepoint.com/:x:/s/financeiro/IQB8ppfjijXDSruvof6G0FUPAdZCrfvScsU7hM8qTXTh-fo?download=1"
 
 @st.cache_data(ttl=60) # Recarrega os dados a cada 1 minuto
@@ -18,23 +18,34 @@ def load_data(url):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
     })
     
-    # Faz o primeiro disparo para capturar redirecionamento e cookies do SharePoint
     response = session.get(url, allow_redirects=True)
-    
-    # Se redirecionar para a página de visualização, adicionamos o parâmetro download
     download_url = response.url
     if "download=1" not in download_url:
-        if "?" in download_url:
-            download_url += "&download=1"
-        else:
-            download_url += "?download=1"
+        download_url += "&download=1" if "?" in download_url else "?download=1"
             
     final_response = session.get(download_url)
     
-    # Lê os dados da aba Lançamentos usando a engine openpyxl
-    df = pd.read_excel(io.BytesIO(final_response.content), sheet_name='Lançamentos', engine='openpyxl')
-    df['DataRef'] = pd.to_datetime(df['DataRef'])
-    df['AnoRef'] = df['DataRef'].dt.year
+    # Lê a aba 'Lançamentos' testando os cabeçalhos das primeiras linhas
+    excel_bytes = io.BytesIO(final_response.content)
+    
+    # Busca automática da linha onde está 'DataRef'
+    df = None
+    for header_row in range(0, 10):
+        try:
+            temp_df = pd.read_excel(excel_bytes, sheet_name='Lançamentos', header=header_row, engine='openpyxl')
+            if 'DataRef' in temp_df.columns:
+                df = temp_df
+                break
+        except Exception:
+            continue
+            
+    if df is None:
+        raise KeyError("A coluna 'DataRef' não foi encontrada nas primeiras linhas da aba 'Lançamentos'.")
+
+    # Limpeza e tratamento das datas
+    df['DataRef'] = pd.to_datetime(df['DataRef'], errors='coerce')
+    df = df.dropna(subset=['DataRef']) # Remove linhas sem data válida
+    df['AnoRef'] = df['DataRef'].dt.year.astype(int)
     df['MêsRef'] = df['DataRef'].dt.month
     return df
 
@@ -47,9 +58,12 @@ except Exception as e:
 
 # --- FILTROS LATERAIS ---
 st.sidebar.header("⚙️ Filtros")
+
+# Filtro de Moeda
 moeda = st.sidebar.radio("Selecione a Moeda", options=['USD', 'BRL', 'EUR'], index=0)
 
-anos_disponiveis = sorted(df_raw['AnoRef'].dropna().unique().astype(int), reverse=True)
+# Filtro por Período
+anos_disponiveis = sorted(df_raw['AnoRef'].unique(), reverse=True)
 anos_selecionados = st.sidebar.multiselect("AnoRef", options=anos_disponiveis, default=anos_disponiveis[:2])
 
 if anos_selecionados:
@@ -57,7 +71,7 @@ if anos_selecionados:
 else:
     df_filtered = df_raw.copy()
 
-df_filtered['Valor_Ativo'] = df_filtered[moeda]
+df_filtered['Valor_Ativo'] = pd.to_numeric(df_filtered[moeda], errors='coerce').fillna(0)
 
 # --- KPI 1: FINANCIAL KEYS (DRE) ---
 st.subheader("📌 1. Financial Keys (DRE)")
